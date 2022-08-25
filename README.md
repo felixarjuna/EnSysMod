@@ -15,7 +15,7 @@ Requirements:
 
 Clone this repository:
 ```bash
-git clone https://github.com/NOWUM/EnSysMod.git
+git clone https://github.com/felixarjuna/EnSysMod.git
 ```
 
 

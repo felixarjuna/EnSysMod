@@ -32,8 +32,9 @@ function ListDataset() {
 
     function getDataset() {
       axios
-        .get("http://localhost:8080/datasets/", { headers })
+        .get("https://ensysmod.herokuapp.com/datasets/", { headers })
         .then((res) => {
+          console.log(res)
           setDataset(() => {
             return [res.data];
           });
@@ -45,7 +46,7 @@ function ListDataset() {
 
     getDataset();
   }, [datasetID, token]);
-
+  console.log(dataset)
   return (
     <div className="sidebar-list">
       <Collapsible trigger="Datasets">

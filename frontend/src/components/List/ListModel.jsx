@@ -31,7 +31,7 @@ function ListModel() {
     };
     function getModel() {
       axios
-        .get("http://localhost:8080/models/", { headers })
+        .get("https://ensysmod.herokuapp.com/models/", { headers })
         .then((res) => {
           setModels(() => {
             return [res.data];

@@ -48,7 +48,7 @@ function Dataset() {
     setLoading(true);
 
     axios
-      .post("http://localhost:8080/datasets/", dataset, { headers })
+      .post("https://ensysmod.herokuapp.com/datasets/", dataset, { headers })
       .then((res) => {
         if (res.status === 200) {
           const dataset_id = res.data.id;
@@ -69,7 +69,7 @@ function Dataset() {
 
             axios
               .post(
-                `http://localhost:8080/datasets/${dataset_id}/upload`,
+                `https://ensysmod.herokuapp.com/datasets/${dataset_id}/upload`,
                 formData,
                 {
                   headers,

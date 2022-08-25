@@ -31,7 +31,7 @@ function Signup() {
     };
 
     axios
-      .post("http://localhost:8080/auth/register", user, { headers })
+      .post("https://ensysmod.herokuapp.com/auth/register", user, { headers })
       .then((res) => {
         if (res.status === 200) {
           setSuccess(true);

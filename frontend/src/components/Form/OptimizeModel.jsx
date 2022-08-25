@@ -36,7 +36,7 @@ function OptimizeModel() {
     };
 
     axios
-      .get(`http://localhost:8080/models/${id}/optimize?output=${output}`, {
+      .get(`https://ensysmod.herokuapp.com/models/${id}/optimize?output=${output}`, {
         headers,
       })
       .then((res) => {

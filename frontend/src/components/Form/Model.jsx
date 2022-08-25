@@ -40,7 +40,7 @@ function Model() {
     event.preventDefault();
 
     axios
-      .post("http://localhost:8080/models/", model, { headers })
+      .post("https://ensysmod.herokuapp.com/models/", model, { headers })
       .then((res) => {
         if (res.status === 200) {
           setModelID(res.data.id);

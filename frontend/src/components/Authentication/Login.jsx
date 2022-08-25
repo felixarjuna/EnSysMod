@@ -35,13 +35,14 @@ function Login() {
 
     const data = `username=${user.username}&password=${user.password}`;
     axios
-      .post("http://localhost:8080/auth/login", data, {
+      .post("https://ensysmod.herokuapp.com/auth/login", data, {
         headers,
       })
       .then((res) => {
         if (res.status === 200) {
           setSuccess(true);
           const newToken = res.data.access_token;
+          console.log(newToken);
           setToken(newToken);
         }
       })

@@ -1,0 +1,244 @@
+name: CI/CD Pull Requests Close
+
+on:
+  pull_request:
+    types: [ closed ]
+
+concurrency:
+  group: ${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Inspect the information that is accessible in each context
+  # https://docs.github.com/en/actions/learn-github-actions/contexts#example-printing-context-information-to-the-log-file
+  # You can delete this section
+  jobinfo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJSON(github) }}
+        run: echo "$GITHUB_CONTEXT"
+      - name: Dump job context
+        env:
+          JOB_CONTEXT: ${{ toJSON(job) }}
+        run: echo "$JOB_CONTEXT"
+      - name: Dump steps context
+        env:
+          STEPS_CONTEXT: ${{ toJSON(steps) }}
+        run: echo "$STEPS_CONTEXT"
+      - name: Dump runner context
+        env:
+          RUNNER_CONTEXT: ${{ toJSON(runner) }}
+        run: echo "$RUNNER_CONTEXT"
+      - name: Dump strategy context
+        env:
+          STRATEGY_CONTEXT: ${{ toJSON(strategy) }}
+        run: echo "$STRATEGY_CONTEXT"
+      - name: Dump matrix context
+        env:
+          MATRIX_CONTEXT: ${{ toJSON(matrix) }}
+        run: echo "$MATRIX_CONTEXT"
+
+  preview_delete:
+    runs-on: ubuntu-latest
+    concurrency: ssh-connection # only one ssh connection at a time
+    name: "Delete preview"
+    if: ${{ github.actor != 'dependabot[bot]' }}
+    steps:
+      - name: Update deployment status - deactivate
+        uses: bobheadxi/deployments@v0.6.2
+        id: deactivate
+        with:
+          step: deactivate-env
+          token: ${{ github.token }}
+          env: PR-${{ github.event.number }}-Preview
+          desc: "Preview deployment for PR #${{ github.event.number }} was pruned."
+
+      - name: Install VPN
+        run: |
+          sudo /sbin/modprobe tun
+          sudo apt install openconnect
+
+      - name: Connect VPN
+        run: |
+          echo "${{ secrets.VPN_PASS }}" | sudo openconnect ${{ secrets.VPN_URL }} --background --user=${{ secrets.VPN_USER }} --passwd-on-stdin
+
+      - name: Stop docker container on private server
+        uses: appleboy/ssh-action@v0.1.4
+        with:
+          host: ${{ secrets.SSH_URL }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASS }}
+          script: |
+            docker ps --filter publish=$((9000 + ${{ github.event.number }}))
+            docker rm -f $(docker ps --filter publish=$((9000 + ${{ github.event.number }})) -aq) > /dev/null || true
+
+      - name: Disconnect VPN
+        if: ${{ always() }}
+        run: |
+          sudo pkill openconnect
+
+
+  create_release:
+    runs-on: "ubuntu-latest"
+    if: github.event.pull_request.merged == true && startsWith( github.head_ref, 'release/')
+    name: "Create Release"
+    outputs:
+      version: ${{ steps.get_version.outputs.VERSION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Get the version
+        id: get_version
+        run: |
+          ref=$(echo "${{ github.head_ref }}")
+          echo ::set-output name=VERSION::${ref/release\//}
+
+      - name: Create Release
+        uses: marvinpinto/action-automatic-releases@latest
+        with:
+          repo_token: "${{ github.token }}"
+          automatic_release_tag: "v${{ steps.get_version.outputs.VERSION }}"
+          prerelease: false
+          title: "Release v${{ steps.get_version.outputs.VERSION }}"
+          # files: |
+
+  generate_docs:
+    runs-on: ubuntu-latest
+    needs: [ create_release ]
+    name: "Generate documentation"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.x'
+          architecture: 'x64'
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: docs-${{ hashFiles('setup.py') }}-${{ hashFiles('requirements**.txt') }}
+
+      - name: Install requirements
+        run: |
+          pip install --upgrade --upgrade-strategy eager -r requirements-dev.txt -e .
+
+      - name: Generate docs
+        run: |
+          cd docs
+          make html
+
+      - name: Push to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ github.token }}
+          publish_dir: ./docs/_build/html
+          allow_empty_commit: true
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          full_commit_message: "Generated documentation v${{ needs.create_release.outputs.version }} @ ${{github.sha}}"
+
+
+  build_prod_image:
+    needs: [ create_release ]
+    runs-on: ubuntu-latest
+    name: "Build prod image"
+    if: ${{ success() && github.actor != 'dependabot[bot]' }}
+    outputs:
+      image_tag: ${{ steps.get_tag.outputs.DOCKER_TAG }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Get tag for docker image
+        id: get_tag
+        run: |
+          DOCKER_TAG=ghcr.io/${{ github.repository }}:${{ needs.create_release.outputs.version }}
+          DOCKER_TAG=${DOCKER_TAG,,}
+          echo ::set-output name=DOCKER_TAG::"${DOCKER_TAG}"
+
+      - name: Build the Docker image
+        run: |
+          docker build . --tag ${{ steps.get_tag.outputs.DOCKER_TAG }}
+
+      - name: Push the Docker image to GitHub Container Registry
+        run: |
+          docker push ${{ steps.get_tag.outputs.DOCKER_TAG }}
+
+
+  deploy_prod:
+    needs: [ create_release, build_prod_image ]
+    runs-on: ubuntu-latest
+    concurrency: ssh-connection # only one ssh connection at a time
+    name: "Deploy production image"
+    if: ${{ success() && github.actor != 'dependabot[bot]' }}
+    steps:
+      - name: Update deployment status - start
+        uses: bobheadxi/deployments@v0.6.2
+        id: deployment
+        with:
+          step: start
+          token: ${{ github.token }}
+          env: Production
+          no_override: false
+          desc: "Production deployment for latest release"
+          ref: "v${{ needs.create_release.outputs.version }}" # tag of current release
+          transient: true
+
+      - name: Install VPN
+        run: |
+          sudo /sbin/modprobe tun
+          sudo apt install openconnect
+
+      - name: Connect VPN
+        run: |
+          echo "${{ secrets.VPN_PASS }}" | sudo openconnect ${{ secrets.VPN_URL }} --background --user=${{ secrets.VPN_USER }} --passwd-on-stdin
+
+      - name: Deploy docker container on private server
+        uses: appleboy/ssh-action@v0.1.4
+        with:
+          host: ${{ secrets.SSH_URL }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASS }}
+          script: |
+            docker system prune -af
+            docker pull ${{ needs.build_prod_image.outputs.image_tag }}
+            docker ps --filter publish=8080
+            docker rm -f $(docker ps --filter publish=8080 -aq)
+            docker run -d -p 8080:8080 --name "production" ${{ needs.build_prod_image.outputs.image_tag }}
+
+      - name: Disconnect VPN
+        if: ${{ always() }}
+        run: |
+          sudo pkill openconnect
+
+      - name: Get env url
+        id: get_env_url
+        run: |
+          ENV_URL="http://${{ secrets.SSH_URL }}:8080"
+          echo ::set-output name=ENV_URL::"${ENV_URL}"
+
+      - name: Update deployment status - finish
+        uses: bobheadxi/deployments@v0.6.2
+        if: always()
+        with:
+          step: finish
+          token: ${{ github.token }}
+          status: ${{ job.status }}
+          deployment_id: ${{ steps.deployment.outputs.deployment_id }}
+          env_url: ${{ steps.get_env_url.outputs.env_url }}
